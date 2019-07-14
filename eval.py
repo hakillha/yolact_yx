@@ -12,7 +12,7 @@ from data import cfg, set_cfg, set_dataset
 
 import numpy as np
 import torch
-import torch.backends.cudnn as cudnn
+# import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 import argparse
 import time
@@ -25,7 +25,7 @@ from collections import defaultdict
 from pathlib import Path
 from collections import OrderedDict
 from PIL import Image
-
+import pdb
 import matplotlib.pyplot as plt
 import cv2
 
@@ -131,7 +131,8 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     """
     if undo_transform:
         img_numpy = undo_image_transformation(img, w, h)
-        img_gpu = torch.Tensor(img_numpy).cuda()
+        # img_gpu = torch.Tensor(img_numpy).cuda()
+        img_gpu = torch.Tensor(img_numpy)
     else:
         img_gpu = img / 255.0
         h, w, _ = img.shape
@@ -140,7 +141,8 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
                                         crop_masks        = args.crop,
                                         score_threshold   = args.score_threshold)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
+        # torch.synchronize()
 
     with timer.env('Copy'):
         if cfg.eval_mask_branch:
@@ -174,6 +176,9 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
             if on_gpu is not None:
                 color = torch.Tensor(color).to(on_gpu).float() / 255.
                 color_cache[on_gpu][color_idx] = color
+                # color = np.asarray(color)
+                # print("HI")
+                # pdb.set_trace()
             return color
 
     # First, draw the masks on the GPU where we can do it really fast
@@ -182,9 +187,12 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     if args.display_masks and cfg.eval_mask_branch:
         # After this, mask is of size [num_dets, h, w, 1]
         masks = masks[:num_dets_to_consider, :, :, None]
+        # pdb.set_trace()
         
         # Prepare the RGB images for each mask given their color (size [num_dets, h, w, 1])
-        colors = torch.cat([get_color(j, on_gpu=img_gpu.device.index).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+        # colors = torch.cat([get_color(j, on_gpu=img.device.index).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+        colors = torch.cat([torch.FloatTensor(get_color(j, on_gpu=img.device.index)).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+        # for j in range num_dets_to_consider
         masks_color = masks.repeat(1, 1, 1, 3) * colors * mask_alpha
 
         # This is 1 everywhere except for 1-mask_alpha where the mask is
@@ -239,9 +247,10 @@ def prep_benchmark(dets_out, h, w):
     with timer.env('Copy'):
         classes, scores, boxes, masks = [x[:args.top_k].cpu().numpy() for x in t]
     
-    with timer.env('Sync'):
+    # with timer.env('Sync'):
         # Just in case
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
+        # torch.synchronize()
 
 def prep_coco_cats():
     """ Prepare inverted table for category id lookup given a coco cats object. """
@@ -385,8 +394,10 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, h, w, num_crowd, image_id, de
 
         classes = list(classes.cpu().numpy().astype(int))
         scores = list(scores.cpu().numpy().astype(float))
-        masks = masks.view(-1, h*w).cuda()
-        boxes = boxes.cuda()
+        # masks = masks.view(-1, h*w).cuda()
+        # boxes = boxes.cuda()
+        masks = masks.view(-1, h*w)
+        boxes = boxes
 
 
     if args.output_coco_json:
@@ -558,7 +569,8 @@ def badhash(x):
     return x
 
 def evalimage(net:Yolact, path:str, save_path:str=None):
-    frame = torch.from_numpy(cv2.imread(path)).cuda().float()
+    # frame = torch.from_numpy(cv2.imread(path)).cuda().float()
+    frame = torch.from_numpy(cv2.imread(path)).float()
     batch = FastBaseTransform()(frame.unsqueeze(0))
     preds = net(batch)
 
@@ -611,8 +623,10 @@ def evalvideo(net:Yolact, path:str):
         print('Could not open video "%s"' % path)
         exit(-1)
     
-    net = CustomDataParallel(net).cuda()
-    transform = torch.nn.DataParallel(FastBaseTransform()).cuda()
+    # net = CustomDataParallel(net).cuda()
+    # transform = torch.nn.DataParallel(FastBaseTransform()).cuda()
+    net = CustomDataParallel(net)
+    transform = torch.nn.DataParallel(FastBaseTransform())
     frame_times = MovingAverage(100)
     fps = 0
     # The 0.8 is to account for the overhead of time.sleep
@@ -631,7 +645,8 @@ def evalvideo(net:Yolact, path:str):
 
     def transform_frame(frames):
         with torch.no_grad():
-            frames = [torch.from_numpy(frame).cuda().float() for frame in frames]
+            # frames = [torch.from_numpy(frame).cuda().float() for frame in frames]
+            frames = [torch.from_numpy(frame).float() for frame in frames]
             return frames, transform(torch.stack(frames, 0))
 
     def eval_network(inp):
@@ -762,7 +777,8 @@ def savevideo(net:Yolact, in_path:str, out_path:str):
         for i in range(num_frames):
             timer.reset()
             with timer.env('Video'):
-                frame = torch.from_numpy(vid.read()[1]).cuda().float()
+                # frame = torch.Tensor(vid.read()[1]).float().cuda()
+                frame = torch.Tensor(vid.read()[1]).float()
                 batch = transform(frame.unsqueeze(0))
                 preds = net(batch)
                 processed = prep_display(preds, frame, None, None, undo_transform=False, class_color=True)
@@ -859,7 +875,8 @@ def evaluate(net:Yolact, dataset, train_mode=False):
 
                 batch = Variable(img.unsqueeze(0))
                 if args.cuda:
-                    batch = batch.cuda()
+                    # batch = batch.cuda()
+                    batch = batch
 
             with timer.env('Network Extra'):
                 preds = net(batch)
@@ -989,9 +1006,10 @@ if __name__ == '__main__':
             os.makedirs('results')
 
         if args.cuda:
-            cudnn.benchmark = True
-            cudnn.fastest = True
-            torch.set_default_tensor_type('torch.cuda.FloatTensor')
+            # cudnn.benchmark = True
+            # cudnn.fastest = True
+            # torch.set_default_tensor_type('torch.cuda.FloatTensor')
+            torch.set_default_tensor_type('torch.FloatTensor')
         else:
             torch.set_default_tensor_type('torch.FloatTensor')
 
@@ -1011,11 +1029,13 @@ if __name__ == '__main__':
         print('Loading model...', end='')
         net = Yolact()
         net.load_weights(args.trained_model)
+        # pdb.set_trace()
         net.eval()
         print(' Done.')
 
         if args.cuda:
-            net = net.cuda()
+            # net = net.cuda()
+            net = net
 
         evaluate(net, dataset)
 

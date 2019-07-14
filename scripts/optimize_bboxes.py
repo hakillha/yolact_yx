@@ -88,7 +88,8 @@ def make_priors(conv_size, scales, aspect_ratios):
 
                 # Point form
                 prior_data += [x - w/2, y - h/2, x + w/2, y + h/2]
-    return torch.Tensor(prior_data).view(-1, 4).cuda()
+    return torch.Tensor(prior_data).view(-1, 4)
+    # return torch.Tensor(prior_data).view(-1, 4).cuda()
 
 
 
