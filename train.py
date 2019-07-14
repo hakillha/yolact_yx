@@ -1,7 +1,6 @@
 from data import *
 from utils.augmentations import SSDAugmentation, BaseTransform
 from utils.functions import MovingAverage, SavePath
-from utils import timer
 from layers.modules import MultiBoxLoss
 from yolact import Yolact
 import os
@@ -13,7 +12,7 @@ import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
-import torch.backends.cudnn as cudnn
+# import torch.backends.cudnn as cudnn
 import torch.nn.init as init
 import torch.utils.data as data
 import numpy as np
@@ -87,7 +86,8 @@ loss_types = ['B', 'C', 'M', 'P', 'D', 'E', 'S']
 
 if torch.cuda.is_available():
     if args.cuda:
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        # torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        torch.set_default_tensor_type('torch.FloatTensor')
     if not args.cuda:
         print("WARNING: It looks like you have a CUDA device, but aren't " +
               "using CUDA.\nRun with --cuda for optimal training speed.")
@@ -106,7 +106,8 @@ class ScatterWrapper:
     
     def make_mask(self):
         out = torch.Tensor(list(range(self.batch_size))).long()
-        if args.cuda: return out.cuda()
+        # if args.cuda: return out.cuda()
+        args.cuda: return out
         else: return out
     
     def get_args(self, mask):
@@ -144,10 +145,6 @@ def train():
     net = yolact_net
     net.train()
 
-    # I don't use the timer during training (I use a different timing method).
-    # Apparently there's a race condition with multiple GPUs.
-    timer.disable_all()
-
     # Both of these can set args.resume to None, so do them before the check    
     if args.resume == 'interrupt':
         args.resume = SavePath.get_interrupt(args.save_folder)
@@ -172,9 +169,11 @@ def train():
                              negpos_ratio=3)
 
     if args.cuda:
-        cudnn.benchmark = True
-        net       = nn.DataParallel(net).cuda()
-        criterion = nn.DataParallel(criterion).cuda()
+        # cudnn.benchmark = True
+        # net       = nn.DataParallel(net).cuda()
+        # criterion = nn.DataParallel(criterion).cuda()
+        net       = nn.DataParallel(net)
+        criterion = nn.DataParallel(criterion)
 
     # loss counters
     loc_loss = 0
@@ -324,9 +323,12 @@ def prepare_data(datum):
     images, (targets, masks, num_crowds) = datum
     
     if args.cuda:
-        images = Variable(images.cuda(), requires_grad=False)
-        targets = [Variable(ann.cuda(), requires_grad=False) for ann in targets]
-        masks = [Variable(mask.cuda(), requires_grad=False) for mask in masks]
+        # images = Variable(images.cuda(), requires_grad=False)
+        # targets = [Variable(ann.cuda(), requires_grad=False) for ann in targets]
+        # masks = [Variable(mask.cuda(), requires_grad=False) for mask in masks]
+        images = Variable(images, requires_grad=False)
+        targets = [Variable(ann, requires_grad=False) for ann in targets]
+        masks = [Variable(mask, requires_grad=False) for mask in masks]
     else:
         images = Variable(images, requires_grad=False)
         targets = [Variable(ann, requires_grad=False) for ann in targets]

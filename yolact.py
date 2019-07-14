@@ -12,21 +12,23 @@ from layers import Detect
 from layers.interpolate import InterpolateModule
 from backbone import construct_backbone
 
-import torch.backends.cudnn as cudnn
+# import torch.backends.cudnn as cudnn
 from utils import timer
 from utils.functions import MovingAverage
 
 # This is required for Pytorch 1.0.1 on Windows to initialize Cuda on some driver versions.
 # See the bug report here: https://github.com/pytorch/pytorch/issues/17108
-torch.cuda.current_device()
+# torch.cuda.current_device()
 
 # As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
-use_jit = torch.cuda.device_count() <= 1
-if not use_jit:
-    print('Multiple GPUs detected! Turning off JIT.')
+# use_jit = torch.cuda.device_count() <= 1
+# if not use_jit:
+#     print('Multiple GPUs detected! Turning off JIT.')
 
-ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
+# ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
+# script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
+ScriptModuleWrapper = nn.Module
+script_method_wrapper = lambda fn, _rcn=None: fn
 
 
 
@@ -265,14 +267,11 @@ class PredictionModule(nn.Module):
 
                             if cfg.backbone.use_pixel_scales:
                                 w = scale * ar / cfg.max_size
-                                h = scale / ar / cfg.max_size
+                                # TODO: Fix this line.
+                                h = scale * ar / cfg.max_size
                             else:
                                 w = scale * ar / conv_w
                                 h = scale / ar / conv_h
-                            
-                            # This is for backward compatability with a bug where I made everything square by accident
-                            if cfg.backbone.use_square_anchors:
-                                h = w
 
                             prior_data += [x, y, w, h]
                 
@@ -464,7 +463,7 @@ class Yolact(nn.Module):
     
     def load_weights(self, path):
         """ Loads weights from a compressed save file. """
-        state_dict = torch.load(path)
+        state_dict = torch.load(path, map_location = 'cpu')
 
         # For backward compatability, remove these (the new variable is called layers)
         for key in list(state_dict.keys()):
@@ -635,9 +634,10 @@ if __name__ == '__main__':
     net.init_weights(backbone_path='weights/' + cfg.backbone.path)
 
     # GPU
-    net = net.cuda()
-    cudnn.benchmark = True
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    # net = net.cuda()
+    net = net
+    # cudnn.benchmark = True
+    torch.set_default_tensor_type('torch.FloatTensor')
 
     x = torch.zeros((1, 3, cfg.max_size, cfg.max_size))
     y = net(x)

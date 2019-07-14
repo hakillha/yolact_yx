@@ -151,10 +151,13 @@ if __name__ == '__main__':
 
         anchors = [make_priors(cs, s, ar) for cs, s, ar in zip(conv_sizes, scales, aspect_ratios)]
         anchors = np.concatenate(anchors, axis=0)
-        anchors = torch.Tensor(anchors).cuda()
+        # anchors = torch.Tensor(anchors).cuda()
+        anchors = torch.Tensor(anchors)
 
-        bboxes_rel = torch.Tensor(bboxes_rel).cuda()
-        perGTAnchorMax = torch.zeros(bboxes_rel.shape[0]).cuda()
+        # bboxes_rel = torch.Tensor(bboxes_rel).cuda()
+        bboxes_rel = torch.Tensor(bboxes_rel)
+        # perGTAnchorMax = torch.zeros(bboxes_rel.shape[0]).cuda()
+        perGTAnchorMax = torch.zeros(bboxes_rel.shape[0])
 
         chunk_size = 1000
         for i in range((bboxes_rel.size(0) // chunk_size) + 1):
