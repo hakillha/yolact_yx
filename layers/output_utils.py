@@ -19,7 +19,7 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     accounting for all the possible configuration settings.
 
     Args:
-        - det_output: The lost of dicts that Detect outputs.
+        - det_output: The list of dicts that Detect outputs.
         - w: The real with of the image.
         - h: The real height of the image.
         - batch_idx: If you have multiple images for this batch, the image's index in the batch.
@@ -78,8 +78,8 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         proto_data = dets['proto']
         
         # Test flag, do not upvote
-        if cfg.mask_proto_debug:
-            np.save('scripts/proto.npy', proto_data.cpu().numpy())
+        # if cfg.mask_proto_debug:
+        #     np.save('scripts/proto.npy', proto_data.cpu().numpy())
         
         if visualize_lincomb:
             display_lincomb(proto_data, masks)

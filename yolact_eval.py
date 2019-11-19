@@ -67,8 +67,6 @@ def parse_args(argv=None):
                         help='If display not set, this resumes mAP calculations from the ap_data_file.')
     parser.add_argument('--max_images', default=-1, type=int,
                         help='The maximum number of images from the dataset to consider. Use -1 for all.')
-    parser.add_argument('--output_coco_json', dest='output_coco_json', action='store_true',
-                        help='If display is not set, instead of processing IoU values, this just dumps detections into the coco json file.')
     parser.add_argument('--bbox_det_file', default='results/bbox_detections.json', type=str,
                         help='The output file for coco bbox results if --coco_results is set.')
     parser.add_argument('--mask_det_file', default='results/mask_detections.json', type=str,
@@ -103,10 +101,16 @@ def parse_args(argv=None):
                         help='The number of frames to evaluate in parallel to make videos play at higher fps.')
     parser.add_argument('--score_threshold', default=0, type=float,
                         help='Detections with a score under this threshold will not be considered. This currently only works in display mode.')
-    parser.add_argument('--dataset', default=None, type=str,
-                        help='If specified, override the dataset specified in the config with this one (example: coco2017_dataset).')
     parser.add_argument('--detect', default=False, dest='detect', action='store_true',
                         help='Don\'t evauluate the mask branch at all and only do object detection. This only works for --display and --benchmark.')
+
+    parser.add_argument('--demo', action='store_true', help='If specified, run og yolact coco demo.')
+    parser.add_argument('--dataset', default='/media/yingges/Data/201910/FT/FTData/yunxikeji-01-2019-10-21/images', type=str,
+                        help='If specified, override the dataset specified in the config with this one (example: coco2017_dataset).')
+    parser.add_argument('--annotation', default='/media/yingges/Data/201910/FT/FTData/tfod/python/cocoformat_valid_out_1.json', type=str,
+                        help='')
+    parser.add_argument('--output_coco_json', dest='output_coco_json', action='store_true',
+                        help='If display is not set, instead of processing IoU values, this just dumps detections into the coco json file.')
 
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
                         benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False)
@@ -119,11 +123,37 @@ def parse_args(argv=None):
     
     if args.seed is not None:
         random.seed(args.seed)
+parse_args()
 
 iou_thresholds = [x / 100 for x in range(50, 100, 5)]
 coco_cats = {} # Call prep_coco_cats to fill this
 coco_cats_inv = {}
 color_cache = defaultdict(lambda: {})
+
+def prep_eval_output(dets_out, img, h, w, undo_transform=True, class_color=False, mask_alpha=0.45):
+    """
+    Note: If undo_transform=False then im_h and im_w are allowed to be None.
+    """
+    if undo_transform:
+        img_numpy = undo_image_transformation(img, w, h)
+        # img_gpu = torch.Tensor(img_numpy).cuda()
+        img_gpu = torch.Tensor(img_numpy)
+    else:
+        img_gpu = img / 255.0
+        h, w, _ = img.shape
+    
+    with timer.env('Postprocess'):
+        t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=0)
+        # torch.cuda.synchronize()
+        # torch.synchronize()
+
+    with timer.env('Copy'):
+        if cfg.eval_mask_branch:
+            # Masks are drawn on the GPU, so don't copy
+            masks = t[3]
+        classes, scores, boxes = [x.cpu().numpy() for x in t[:3]]
+   
+    return classes, scores, boxes, masks
 
 def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, mask_alpha=0.45):
     """
@@ -400,7 +430,7 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, h, w, num_crowd, image_id, de
         boxes = boxes
 
 
-    if args.output_coco_json:
+    if not args.demo:
         with timer.env('JSON Output'):
             boxes = boxes.cpu().numpy()
             masks = masks.view(-1, h, w).cpu().numpy()
@@ -600,6 +630,43 @@ def evalimages(net:Yolact, input_folder:str, output_folder:str):
         evalimage(net, path, out_path)
         print(path + ' -> ' + out_path)
     print('Done.')
+
+# def evalimages_wo_anno(input_folder:str):
+#     with torch.no_grad():
+#         print()
+#         net = main(True)
+#         res_dict = {}
+#         for i, p in enumerate(Path(input_folder).glob('*')): 
+#             path = str(p)
+#             basename = os.path.basename(path)
+#             print('Processing image No.' + str(i) + ': ' + basename)
+#             frame = torch.from_numpy(cv2.imread(path)).float()
+#             batch = FastBaseTransform()(frame.unsqueeze(0))
+#             preds = net(batch)
+
+#             classes, scores, boxes, masks = prep_eval_output(preds, frame, None, None, undo_transform=False)
+#             # res_dict[basename] = {'classes': classes,
+#             #                      'scores': scores,
+#             #                      'boxes': boxes,
+#             #                      'masks': masks,}
+#         print('Done.')
+#         return res_dict
+
+def evalimage_wo_anno(path:str, model_path):
+    with torch.no_grad():
+        print()
+        net = main(True, model_path)
+        frame = torch.from_numpy(cv2.imread(path)).float()
+        batch = FastBaseTransform()(frame.unsqueeze(0))
+        preds = net(batch)
+        classes, scores, boxes, masks = prep_eval_output(preds, frame, None, None, undo_transform=False)
+
+        res = {'file_name': os.path.basename(path),
+               'classes': classes,
+               'scores': scores,
+               'boxes': boxes,
+               'masks': masks,}
+        return res
 
 from multiprocessing.pool import ThreadPool
 from queue import Queue
@@ -865,7 +932,7 @@ def evaluate(net:Yolact, dataset, train_mode=False):
             timer.reset()
 
             with timer.env('Load Data'):
-                img, gt, gt_masks, h, w, num_crowd = dataset.pull_item(image_idx)
+                img, gt, gt_masks, h, w, num_crowd, _ = dataset.pull_item(image_idx)
 
                 # Test flag, do not upvote
                 if cfg.mask_proto_debug:
@@ -937,6 +1004,96 @@ def evaluate(net:Yolact, dataset, train_mode=False):
         print('Stopping...')
 
 
+# def evaluate_imgs(net:Yolact, dataset, train_mode=False):
+#     net.detect.use_fast_nms = args.fast_nms
+#     cfg.mask_proto_debug = args.mask_proto_debug
+
+#     frame_times = MovingAverage()
+#     dataset_size = len(dataset) if args.max_images < 0 else min(args.max_images, len(dataset))
+#     progress_bar = ProgressBar(30, dataset_size)
+
+#     print()
+
+#     if not args.display and not args.benchmark:
+#         # For each class and iou, stores tuples (score, isPositive)
+#         # Index ap_data[type][iouIdx][classIdx]
+#         ap_data = {
+#             'box' : [[APDataObject() for _ in cfg.dataset.class_names] for _ in iou_thresholds],
+#             'mask': [[APDataObject() for _ in cfg.dataset.class_names] for _ in iou_thresholds]
+#         }
+#         detections = Detections()
+#     else:
+#         timer.disable('Load Data')
+
+#     dataset_indices = list(range(len(dataset)))
+    
+#     if args.shuffle:
+#         random.shuffle(dataset_indices)
+#     elif not args.no_sort:
+#         # Do a deterministic shuffle based on the image ids
+#         #
+#         # I do this because on python 3.5 dictionary key order is *random*, while in 3.6 it's
+#         # the order of insertion. That means on python 3.6, the images come in the order they are in
+#         # in the annotations file. For some reason, the first images in the annotations file are
+#         # the hardest. To combat this, I use a hard-coded hash function based on the image ids
+#         # to shuffle the indices we use. That way, no matter what python version or how pycocotools
+#         # handles the data, we get the same result every time.
+#         hashed = [badhash(x) for x in dataset.ids]
+#         dataset_indices.sort(key=lambda x: hashed[x])
+
+#     dataset_indices = dataset_indices[:dataset_size]
+
+#     res = {}
+#     try:
+#         # Main eval loop
+#         for it, image_idx in enumerate(dataset_indices):
+#             timer.reset()
+
+#             with timer.env('Load Data'):
+#                 img, gt, gt_masks, h, w, num_crowd, fname = dataset.pull_item_wo_anno(image_idx)
+
+#                 # Test flag, do not upvote
+#                 if cfg.mask_proto_debug:
+#                     with open('scripts/info.txt', 'w') as f:
+#                         f.write(str(dataset.ids[image_idx]))
+#                     np.save('scripts/gt.npy', gt_masks)
+
+#                 batch = Variable(img.unsqueeze(0))
+#                 if args.cuda:
+#                     # batch = batch.cuda()
+#                     batch = batch
+
+#             with timer.env('Network Extra'):
+#                 preds = net(batch)
+
+#             # Perform the meat of the operation here depending on our mode.
+#             prep_metrics(ap_data, preds, img, gt, gt_masks, h, w, num_crowd, dataset.ids[image_idx], detections)
+#             res[fname] = detections
+
+#             # First couple of images take longer because we're constructing the graph.
+#             # Since that's technically initialization, don't include those in the FPS calculations.
+#             if it > 1:
+#                 frame_times.add(timer.total_time())
+            
+#             if args.display:
+#                 if it > 1:
+#                     print('Avg FPS: %.4f' % (1 / frame_times.get_avg()))
+#                 plt.imshow(img_numpy)
+#                 plt.title(str(dataset.ids[image_idx]))
+#                 plt.show()
+#             elif not args.no_bar:
+#                 if it > 1: fps = 1 / frame_times.get_avg()
+#                 else: fps = 0
+#                 progress = (it+1) / dataset_size * 100
+#                 progress_bar.set_val(it+1)
+#                 print('\rProcessing Images  %s %6d / %6d (%5.2f%%)    %5.2f fps        '
+#                     % (repr(progress_bar), it+1, dataset_size, progress, fps), end='')
+
+#     except KeyboardInterrupt:
+#         print('Stopping...')
+
+#     return res
+
 def calc_map(ap_data):
     print('Calculating mAP...')
     aps = [{'box': [], 'mask': []} for _ in iou_thresholds]
@@ -975,13 +1132,12 @@ def print_maps(all_maps):
     print(make_sep(len(all_maps['box']) + 1))
     print()
 
-
-
-if __name__ == '__main__':
-    parse_args()
-
+def main(as_module=False, model_path=None):
     if args.config is not None:
         set_cfg(args.config)
+
+    if model_path:
+        args.trained_model = model_path
 
     if args.trained_model == 'interrupt':
         args.trained_model = SavePath.get_interrupt('weights/')
@@ -998,8 +1154,17 @@ if __name__ == '__main__':
     if args.detect:
         cfg.eval_mask_branch = False
 
-    if args.dataset is not None:
-        set_dataset(args.dataset)
+    if not args.demo:
+        # set_dataset(args.dataset)
+        cfg.dataset.valid_images = args.dataset
+        cfg.dataset.valid_info = args.annotation
+        cfg.dataset.class_names = {'roa', 'loa', 'soa', 'sloa', 'sroa',
+                                   'ooa', 'cf', 'rg', 'np', 'cross',
+                                   'ld','zyfgd','lcfgd','lmj','sfwl',
+                                   'sdwl','sfyl','sdyl','dfyl','sl'}
+
+        cfg.dataset.has_gt = True
+        cfg.num_classes = 21
 
     with torch.no_grad():
         if not os.path.exists('results'):
@@ -1037,6 +1202,13 @@ if __name__ == '__main__':
             # net = net.cuda()
             net = net
 
-        evaluate(net, dataset)
+        if not as_module:
+            if args.demo:
+                evaluate(net, dataset)
+            elif args.output_coco_json:
+                evaluate(net, dataset)
+        else:
+            return net
 
-
+if __name__ == '__main__':
+    main()

@@ -155,6 +155,11 @@ coco2017_testdev_dataset = dataset_base.copy({
     'label_map': COCO_LABEL_MAP
 })
 
+# ft_classes = {'roa', 'loa', 'soa', 'sloa', 'sroa',
+#               'ooa', 'cf', 'rg', 'np', 'cross',
+#               'ld','zyfgd','lcfgd','lmj','sfwl',
+#               'sdwl','sfyl','sdyl','dfyl','sl'}
+
 
 
 
@@ -571,10 +576,12 @@ yolact_base_config = coco_base_config.copy({
 
     # Dataset stuff
     'dataset': coco2017_dataset,
-    'num_classes': len(coco2017_dataset.class_names) + 1,
+    # 'num_classes': len(coco2017_dataset.class_names) + 1,
+    'num_classes': 80 + 1,
 
     # Image Size
     'max_size': 550,
+    'min_size': 550,
     
     # Training params
     'lr_steps': (280000, 600000, 700000, 750000),
