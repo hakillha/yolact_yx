@@ -1,4 +1,4 @@
-from data import COCODetection, get_label_map, MEANS, COLORS
+from data import COCODetection, COCOAnnotationTransform, get_label_map, MEANS, COLORS
 from yolact import Yolact
 from utils.augmentations import BaseTransform, FastBaseTransform, Resize
 from utils.functions import MovingAverage, ProgressBar
@@ -28,6 +28,8 @@ from PIL import Image
 import pdb
 import matplotlib.pyplot as plt
 import cv2
+
+from pycocotools import mask as maskUtils
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -130,6 +132,7 @@ coco_cats = {} # Call prep_coco_cats to fill this
 coco_cats_inv = {}
 color_cache = defaultdict(lambda: {})
 
+###YX_CODE###
 def prep_eval_output(dets_out, img, h, w, undo_transform=True, class_color=False, mask_alpha=0.45):
     """
     Note: If undo_transform=False then im_h and im_w are allowed to be None.
@@ -143,6 +146,7 @@ def prep_eval_output(dets_out, img, h, w, undo_transform=True, class_color=False
         h, w, _ = img.shape
     
     with timer.env('Postprocess'):
+        # score_threshold is 0 by default for coco eval
         t = postprocess(dets_out, w, h, crop_masks=args.crop, score_threshold=0)
         # torch.cuda.synchronize()
         # torch.synchronize()
@@ -631,35 +635,71 @@ def evalimages(net:Yolact, input_folder:str, output_folder:str):
         print(path + ' -> ' + out_path)
     print('Done.')
 
-# def evalimages_wo_anno(input_folder:str):
-#     with torch.no_grad():
-#         print()
-#         net = main(True)
-#         res_dict = {}
-#         for i, p in enumerate(Path(input_folder).glob('*')): 
-#             path = str(p)
-#             basename = os.path.basename(path)
-#             print('Processing image No.' + str(i) + ': ' + basename)
-#             frame = torch.from_numpy(cv2.imread(path)).float()
-#             batch = FastBaseTransform()(frame.unsqueeze(0))
-#             preds = net(batch)
+def evalimages_yx(path_list:list, model_path, display=False):
+    """
+    Args:
+        path: Path of input image. Absolute path is recommended.
+        model_path: Path of model file. Absolute path is recommended. For now format of the file name needs to follow a specific pattern.
 
-#             classes, scores, boxes, masks = prep_eval_output(preds, frame, None, None, undo_transform=False)
-#             # res_dict[basename] = {'classes': classes,
-#             #                      'scores': scores,
-#             #                      'boxes': boxes,
-#             #                      'masks': masks,}
-#         print('Done.')
-#         return res_dict
+    Returns:
+        A dictionary with following key-value pairs:
+            'file_name': File name of the input image,
+            'classes': A list class names of the returning detection/segmentation,
+            'scores': A list of scores for the returning detection,
+            'boxes':  A list of boxes of the returning detection each of which follows this pattern: [tlx, tly, brx, bry],
+            'masks': A list of binary masks of the returning segmentation.
 
-def evalimage_wo_anno(path:str, model_path):
+    """
     with torch.no_grad():
-        print()
+        net = main(True, model_path)
+        for path in path_list:
+            frame = torch.from_numpy(cv2.imread(path)).float()
+            batch = FastBaseTransform()(frame.unsqueeze(0))
+            preds = net(batch)
+            classes, scores, boxes, masks = prep_eval_output(preds, frame, None, None, undo_transform=False)
+
+            mask_rle = [maskUtils.encode(np.asfortranarray(masks.numpy()[i,:,:].astype(np.uint8))) for i in range(masks.shape[0])]
+            print(mask_rle)
+
+            if display:
+                img_numpy = prep_display(preds, frame, None, None, undo_transform=False)
+                plt.imshow(img_numpy)
+                plt.title(path)
+                plt.show()
+
+            res = {'file_name': os.path.basename(path),
+                   'classes': classes,
+                   'scores': scores,
+                   'boxes': boxes,
+                   'masks': masks,}
+
+def evalimage_yx(path:str, model_path, display=False):
+    """
+    Args:
+        path: Path of input image. Absolute path is recommended.
+        model_path: Path of model file. Absolute path is recommended. For now format of the file name needs to follow a specific pattern.
+
+    Returns:
+        A dictionary with following key-value pairs:
+            'file_name': File name of the input image,
+            'classes': A list class names of the returning detection/segmentation,
+            'scores': A list of scores for the returning detection,
+            'boxes':  A list of boxes of the returning detection each of which follows this pattern: [tlx, tly, brx, bry],
+            'masks': A list of binary masks of the returning segmentation.
+
+    """
+    with torch.no_grad():
         net = main(True, model_path)
         frame = torch.from_numpy(cv2.imread(path)).float()
         batch = FastBaseTransform()(frame.unsqueeze(0))
         preds = net(batch)
         classes, scores, boxes, masks = prep_eval_output(preds, frame, None, None, undo_transform=False)
+
+        if display:
+            img_numpy = prep_display(preds, frame, None, None, undo_transform=False)
+            plt.imshow(img_numpy)
+            plt.title(path)
+            plt.show()
 
         res = {'file_name': os.path.basename(path),
                'classes': classes,
@@ -932,7 +972,8 @@ def evaluate(net:Yolact, dataset, train_mode=False):
             timer.reset()
 
             with timer.env('Load Data'):
-                img, gt, gt_masks, h, w, num_crowd, _ = dataset.pull_item(image_idx)
+                # img, gt, gt_masks, h, w, num_crowd, _ = dataset.pull_item(image_idx)
+                img, gt, gt_masks, h, w, num_crowd = dataset.pull_item(image_idx)
 
                 # Test flag, do not upvote
                 if cfg.mask_proto_debug:
@@ -1155,17 +1196,18 @@ def main(as_module=False, model_path=None):
         cfg.eval_mask_branch = False
 
     if not args.demo:
-        # set_dataset(args.dataset)
+        cfg.dataset.name = 'Custom_dataset'
         cfg.dataset.valid_images = args.dataset
         cfg.dataset.valid_info = args.annotation
-        cfg.dataset.class_names = {'roa', 'loa', 'soa', 'sloa', 'sroa',
+        cfg.dataset.class_names = ('roa', 'loa', 'soa', 'sloa', 'sroa',
                                    'ooa', 'cf', 'rg', 'np', 'cross',
                                    'ld','zyfgd','lcfgd','lmj','sfwl',
-                                   'sdwl','sfyl','sdyl','dfyl','sl'}
+                                   'sdwl','sfyl','sdyl','dfyl','sl')
+        cfg.dataset.label_map = None
 
         cfg.dataset.has_gt = True
         cfg.num_classes = 21
-
+        
     with torch.no_grad():
         if not os.path.exists('results'):
             os.makedirs('results')
@@ -1184,12 +1226,15 @@ def main(as_module=False, model_path=None):
             calc_map(ap_data)
             exit()
 
-        if args.image is None and args.video is None and args.images is None:
-            dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
-                                    transform=BaseTransform(), has_gt=cfg.dataset.has_gt)
-            prep_coco_cats()
-        else:
-            dataset = None        
+        if not as_module:
+            if args.image is None and args.video is None and args.images is None:
+                dataset = COCODetection(cfg.dataset.valid_images, cfg.dataset.valid_info,
+                                        target_transform=COCOAnnotationTransform(),
+                                        transform=BaseTransform(),
+                                        has_gt=cfg.dataset.has_gt)
+                prep_coco_cats()
+            else:
+                dataset = None        
 
         print('Loading model...', end='')
         net = Yolact()
@@ -1205,7 +1250,8 @@ def main(as_module=False, model_path=None):
         if not as_module:
             if args.demo:
                 evaluate(net, dataset)
-            elif args.output_coco_json:
+            # elif args.output_coco_json:
+            else:
                 evaluate(net, dataset)
         else:
             return net
